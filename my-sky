@@ -1,0 +1,124 @@
+provider "aws" {
+  region                  = "eu-central-1"
+  profile                 = "saml"
+  shared_credentials_file = "~/.aws/credentials"
+}
+
+data "aws_subnet_ids" "private" {
+  vpc_id = "vpc-082739819ff38fa3a"
+}
+
+variable "count" {}
+variable "volume_size" {}
+
+resource "aws_instance" "prod" {
+  ami                    = "ami-044d9dafb12a674e9"
+  instance_type          = "m5.4xlarge"
+  count                  = "${var.count}"
+  iam_instance_profile   = "vrex-sky-role"
+  vpc_security_group_ids = ["sg-0d84e5746ae767c7d", "sg-0d6c4d01d1099d988"]
+  key_name               = "sky-vrex-eu-central-1"
+  subnet_id              = "${element(data.aws_subnet_ids.private.ids, count.ind                                                                             ex)}"
+  #user_data         = ""
+  root_block_device {
+    volume_type           = "gp2"
+    volume_size           = "${var.volume_size}"
+    delete_on_termination = true
+  }
+
+  tags = {
+    Name = "vrex-de-prod1"
+  }
+}
+
+resource "aws_lb" "vrex-de-prod1-LB" {
+  name               = "vrex-de-prod1-LB"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = ["sg-01a5b31fe60be7d61"]
+  ip_address_type    = "dualstack"
+  subnets            = ["subnet-0065bc0aa4c471473", "subnet-061ef9006cff0d1f4",                                                                              "subnet-0cc770e4c0accf2a6"]
+
+  enable_deletion_protection = false
+
+  tags = {
+    Name = "vrex-de-Prod1"
+  }
+}
+
+resource "aws_lb_target_group" "vrex-de-prod1-tg" {
+  name     = "vrex-de-prod1-tg"
+  port     = 8080
+  protocol = "HTTP"
+  vpc_id   = "vpc-082739819ff38fa3a"
+
+  tags = {
+    Name = "vrex-de-prod1"
+  }
+}
+
+resource "aws_lb_target_group_attachment" "prod" {
+  target_group_arn = "${aws_lb_target_group.vrex-de-prod1-tg.arn}"
+  target_id        = "${element(aws_instance.prod.*.id, count.index)}"
+  port             = 8080
+  count            = "${var.count}"
+  lifecycle {
+    ignore_changes = true
+  }
+}
+
+resource "aws_lb_listener" "vrex-de-prod1-https" {
+  load_balancer_arn = "${aws_lb.vrex-de-prod1-LB.arn}"
+  port              = "443"
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-2016-08"
+  certificate_arn   = "arn:aws:acm:eu-central-1:585989164753:certificate/61ad355                                                                             7-4ef5-44a2-b66f-2d900e9299e2"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = "${aws_lb_target_group.vrex-de-prod1-tg.arn}"
+  }
+}
+/*
+resource "aws_lb_listener" "vrex-de-prod1-http" {
+  load_balancer_arn = "${aws_lb.vrex-de-prod1-LB.arn}"
+  port              = "80"
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = "${aws_lb_target_group.vrex-de-prod1-tg.arn}"
+  }
+}
+*/
+resource "aws_route53_record" "vrex-de-prod1-A" {
+  zone_id = "ZZ2BCWNIQ2NSL"
+  name    = "de-prod.vrex-sky.net."
+  type    = "A"
+
+  alias {
+    name                   = "dualstack.${aws_lb.vrex-de-prod1-LB.dns_name}"
+    zone_id                = "${aws_lb.vrex-de-prod1-LB.zone_id}"
+    evaluate_target_health = true
+  }
+  weighted_routing_policy {
+    weight = 0
+  }
+  set_identifier = "de-prod"
+}
+
+resource "aws_route53_record" "vrex-de-prod1-AAAA" {
+  zone_id = "ZZ2BCWNIQ2NSL"
+  name    = "de-prod.vrex-sky.net."
+  type    = "AAAA"
+
+  alias {
+    name                   = "dualstack.${aws_lb.vrex-de-prod1-LB.dns_name}"
+    zone_id                = "${aws_lb.vrex-de-prod1-LB.zone_id}"
+    evaluate_target_health = true
+  }
+  weighted_routing_policy {
+    weight = 0
+  }
+  set_identifier = "de-prod"
+}
